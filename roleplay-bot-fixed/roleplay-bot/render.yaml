@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: roleplay-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_USER_ID
+        sync: false
+      - key: CHANNEL_ID
+        sync: falses
