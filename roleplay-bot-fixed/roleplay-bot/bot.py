@@ -70,10 +70,6 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-
-def main():
-    # ... کدهای فعلی main ...
-
 def main() -> None:
     try:
         config = load_config()
