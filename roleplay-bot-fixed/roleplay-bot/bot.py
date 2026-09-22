@@ -4,14 +4,13 @@ Entry point for the Roleplay Bot.
 Run with:  python bot.py
 (from inside this project's root folder, with a .env file present)
 """
+from __future__ import annotations
+
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from __future__ import annotations
-
 import logging
-
 from telegram import Update
 from telegram.ext import (
     Application,
