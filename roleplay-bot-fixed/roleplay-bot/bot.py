@@ -4,13 +4,11 @@ Entry point for the Roleplay Bot.
 Run with:  python bot.py
 (from inside this project's root folder, with a .env file present)
 """
+
 from __future__ import annotations
 
-import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
 import logging
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -22,7 +20,14 @@ from telegram.ext import (
 
 from config import ConfigError, load_config
 from database import init_database
-from handlers.admin import admin_callback, admin_command, build_create_game_conversation
+from handlers.admin import (
+    admin_callback,
+    admin_command,
+    build_create_game_conversation,
+    freeze_command,
+    setcooldown_command,
+    unfreeze_command,
+)
 from handlers.dispatch import handle_group_message
 from handlers.errors import error_handler
 from handlers.start import start_command
@@ -52,22 +57,7 @@ async def _post_shutdown(application: Application) -> None:
     if connection is not None:
         await connection.close()
         logger.info("Database connection closed.")
-        
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
 
-    def log_message(self, format, *args):
-        pass
-
-
-def run_health_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server.serve_forever()
 
 def main() -> None:
     try:
@@ -87,9 +77,18 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("setcooldown", setcooldown_command))
+    application.add_handler(CommandHandler("freeze", freeze_command))
+    application.add_handler(CommandHandler("unfreeze", unfreeze_command))
     application.add_handler(build_create_game_conversation())
     application.add_handler(
-        CallbackQueryHandler(admin_callback, pattern=r"^admin:(list_games|list_players|help|link:\d+)$")
+        CallbackQueryHandler(
+            admin_callback,
+            pattern=(
+                r"^admin:(list_games|list_players|help|delete_game|delcancel"
+                r"|link:\d+|delgame:\d+|delconfirm:\d+:(?:all|keep))$"
+            ),
+        )
     )
 
     # Single catch-all for everything else in group/supergroup chats
@@ -109,7 +108,6 @@ def main() -> None:
     application.add_error_handler(error_handler)
 
     logger.info("Starting polling…")
-    threading.Thread(target=run_health_server, daemon=True).start()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
