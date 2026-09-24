@@ -8,6 +8,9 @@ Run with:  python bot.py
 from __future__ import annotations
 
 import logging
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Update
 from telegram.ext import (
@@ -57,6 +60,22 @@ async def _post_shutdown(application: Application) -> None:
     if connection is not None:
         await connection.close()
         logger.info("Database connection closed.")
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
 
 
 def main() -> None:
@@ -108,6 +127,7 @@ def main() -> None:
     application.add_error_handler(error_handler)
 
     logger.info("Starting polling…")
+    threading.Thread(target=run_health_server, daemon=True).start()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
