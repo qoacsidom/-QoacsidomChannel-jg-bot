@@ -1,6 +1,6 @@
 """
 Handles messages sent by players inside their private roleplay group, and
-forwards authorized, active players' text/photo messages to the public
+forwards authorized, active players' text/photo/video messages to the public
 Roleplay channel.
 
 NOTE: this function assumes the caller (handlers/dispatch.py) has already
@@ -11,18 +11,22 @@ as roleplay content, even if they don't match a recognized command.
 from __future__ import annotations
 
 import logging
+import math
+import time
 
 from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from constants import (
+    MSG_CHANNEL_FROZEN,
     MSG_CHANNEL_SEND_FAILED,
     MSG_CHAT_NOT_LINKED,
+    MSG_COOLDOWN_WAIT,
     MSG_GAME_INACTIVE,
     MSG_PLAYER_INACTIVE,
     MSG_UNKNOWN_SENDER_IN_LINKED_CHAT,
-    MSG_UNSUPPORTED_MEDIA,
+    MSG_UNSUPPORTED_MEDIA_FA,
 )
 from repositories.messages import MessageRecord
 from services import forwarding
@@ -41,6 +45,7 @@ async def handle_player_message(update: Update, context: ContextTypes.DEFAULT_TY
     config = context.bot_data["config"]
     player_repo = context.bot_data["player_repo"]
     message_repo = context.bot_data["message_repo"]
+    game_repo = context.bot_data["game_repo"]
 
     link = await player_repo.get_by_chat(chat.id)
 
@@ -67,6 +72,36 @@ async def handle_player_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     await player_repo.update_username(user.id, user.username)
 
+    # Only text, photo and video are supported; everything else is rejected.
+    if message.photo:
+        message_type = "photo"
+        text_or_caption = message.caption
+    elif message.video:
+        message_type = "video"
+        text_or_caption = message.caption
+    elif message.text:
+        message_type = "text"
+        text_or_caption = message.text
+    else:
+        await message.reply_text(MSG_UNSUPPORTED_MEDIA_FA)
+        return
+
+    # From here on the message WOULD be posted to the channel, so freeze and
+    # cooldown apply.
+    if await game_repo.is_frozen():
+        await message.reply_text(MSG_CHANNEL_FROZEN)
+        return
+
+    cooldown_seconds = await game_repo.get_cooldown_seconds(link.game_id)
+    last_post_at: dict = context.bot_data.setdefault("last_post_at", {})
+    cooldown_key = (link.game_id, user.id)
+    last = last_post_at.get(cooldown_key)
+    if last is not None:
+        remaining = cooldown_seconds - (time.monotonic() - last)
+        if remaining > 0:
+            await message.reply_text(MSG_COOLDOWN_WAIT.format(seconds=max(1, math.ceil(remaining))))
+            return
+
     header = forwarding.build_header(
         game_name=link.game_name,
         country=link.country_or_faction,
@@ -75,19 +110,18 @@ async def handle_player_message(update: Update, context: ContextTypes.DEFAULT_TY
         telegram_user_id=user.id,
     )
 
-    if message.photo:
-        message_type = "photo"
-        text_or_caption = message.caption
-    elif message.text:
-        message_type = "text"
-        text_or_caption = message.text
-    else:
-        await message.reply_text(MSG_UNSUPPORTED_MEDIA)
-        return
-
     try:
         if message_type == "photo":
             channel_message_id = await forwarding.forward_photo(
+                bot=context.bot,
+                channel_id=config.channel_id,
+                source_chat_id=chat.id,
+                source_message_id=message.message_id,
+                header=header,
+                caption=text_or_caption,
+            )
+        elif message_type == "video":
+            channel_message_id = await forwarding.forward_video(
                 bot=context.bot,
                 channel_id=config.channel_id,
                 source_chat_id=chat.id,
@@ -106,6 +140,9 @@ async def handle_player_message(update: Update, context: ContextTypes.DEFAULT_TY
         logger.error("Failed to forward message to channel %s: %s", config.channel_id, exc)
         await message.reply_text(MSG_CHANNEL_SEND_FAILED)
         return
+
+    # Start the cooldown only after a successful post.
+    last_post_at[cooldown_key] = time.monotonic()
 
     record = MessageRecord(
         game_id=link.game_id,
