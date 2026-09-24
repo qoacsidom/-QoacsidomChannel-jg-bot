@@ -28,20 +28,37 @@ from telegram.ext import (
 )
 
 from constants import (
+    ALLOWED_COOLDOWNS,
+    BTN_CANCEL,
+    BTN_DELETE_EVERYTHING,
+    BTN_KEEP_MESSAGES,
     CMD_SET_COUNTRY,
     CMD_SET_NAME,
     INFO_TEMPLATE,
     MSG_ADMIN_NO_REPLY,
     MSG_ADMIN_REPLY_UNTRACKED,
+    MSG_CHANNEL_UNFROZEN,
     MSG_COUNTRY_UPDATED,
+    MSG_DELETE_CANCELLED,
+    MSG_DELETE_CONFIRM,
+    MSG_DELETE_MESSAGES_DELETED,
+    MSG_DELETE_MESSAGES_KEPT,
+    MSG_DELETE_PICK_GAME,
+    MSG_FREEZE_OK,
+    MSG_GAME_DELETED,
+    MSG_GAME_NOT_FOUND,
     MSG_LINK_ALREADY_LINKED,
     MSG_LINK_ALREADY_MEMBER,
     MSG_LINK_NO_PENDING_SENDER,
     MSG_LINK_SUCCESS,
     MSG_NAME_UPDATED,
+    MSG_NO_GAMES,
     MSG_NOT_ADMIN,
     MSG_PLAYER_ACTIVATED,
     MSG_PLAYER_DEACTIVATED,
+    MSG_SETCOOLDOWN_NEED_GAME,
+    MSG_SETCOOLDOWN_OK,
+    MSG_SETCOOLDOWN_USAGE,
     NO_USERNAME_TEXT,
 )
 from services.identity import parse_admin_command
@@ -141,6 +158,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             [InlineKeyboardButton("➕ Create Game", callback_data="admin:create_game")],
             [InlineKeyboardButton("📋 List Games", callback_data="admin:list_games")],
             [InlineKeyboardButton("👥 List Players", callback_data="admin:list_players")],
+            [InlineKeyboardButton("🗑️ Delete Game", callback_data="admin:delete_game")],
             [InlineKeyboardButton("❓ Help", callback_data="admin:help")],
         ])
         await message.reply_text("🛠 Admin menu:", reply_markup=keyboard)
@@ -219,8 +237,60 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"{CMD_SET_NAME} <value>\n"
             "فعال   (activate)\n"
             "غیرفعال   (deactivate)\n"
-            "اطلاعات   (info)"
+            "اطلاعات   (info)\n\n"
+            "Slash commands (admin only):\n"
+            "/setcooldown <30|60|120> [game_id]\n"
+            "/freeze\n"
+            "/unfreeze"
         )
+
+    elif data == "admin:delete_game":
+        game_repo = context.bot_data["game_repo"]
+        games = await game_repo.list_all()
+        if not games:
+            await query.edit_message_text(MSG_NO_GAMES)
+            return
+        rows = [
+            [InlineKeyboardButton(f"[{g.id}] {g.name}", callback_data=f"admin:delgame:{g.id}")]
+            for g in games
+        ]
+        rows.append([InlineKeyboardButton(BTN_CANCEL, callback_data="admin:delcancel")])
+        await query.edit_message_text(MSG_DELETE_PICK_GAME, reply_markup=InlineKeyboardMarkup(rows))
+
+    elif data.startswith("admin:delgame:"):
+        game_id = int(data.split(":", 2)[2])
+        game = await context.bot_data["game_repo"].get_by_id(game_id)
+        if game is None:
+            await query.edit_message_text(MSG_GAME_NOT_FOUND)
+            return
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(BTN_DELETE_EVERYTHING, callback_data=f"admin:delconfirm:{game_id}:all")],
+            [InlineKeyboardButton(BTN_KEEP_MESSAGES, callback_data=f"admin:delconfirm:{game_id}:keep")],
+            [InlineKeyboardButton(BTN_CANCEL, callback_data="admin:delcancel")],
+        ])
+        await query.edit_message_text(MSG_DELETE_CONFIRM.format(name=game.name), reply_markup=keyboard)
+
+    elif data.startswith("admin:delconfirm:"):
+        _, _, raw_game_id, mode = data.split(":", 3)
+        game_id = int(raw_game_id)
+        # Default is "Keep messages": only an explicit "all" removes history.
+        delete_messages = mode == "all"
+        game_repo = context.bot_data["game_repo"]
+        game = await game_repo.get_by_id(game_id)
+        if game is None:
+            await query.edit_message_text(MSG_GAME_NOT_FOUND)
+            return
+        await game_repo.delete_game(game_id, delete_messages=delete_messages)
+        logger.info("Admin deleted game_id=%s (delete_messages=%s)", game_id, delete_messages)
+        await query.edit_message_text(
+            MSG_GAME_DELETED.format(
+                name=game.name,
+                messages=MSG_DELETE_MESSAGES_DELETED if delete_messages else MSG_DELETE_MESSAGES_KEPT,
+            )
+        )
+
+    elif data == "admin:delcancel":
+        await query.edit_message_text(MSG_DELETE_CANCELLED)
 
     elif data.startswith("admin:link:"):
         game_id = int(data.split(":", 2)[2])
@@ -269,6 +339,100 @@ async def _link_chat_to_game(query, context: ContextTypes.DEFAULT_TYPE, game_id:
             set_country=CMD_SET_COUNTRY,
         )
     )
+
+
+# ---------------------------------------------------------------------
+# 2b. /setcooldown, /freeze, /unfreeze (admin-only slash commands)
+# ---------------------------------------------------------------------
+
+async def setcooldown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/setcooldown <30|60|120> [game_id] - sets the per-game anti-spam cooldown."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+    if user is None or chat is None or message is None:
+        return
+
+    if not _is_admin(context, user.id):
+        await message.reply_text(MSG_NOT_ADMIN)
+        return
+
+    args = context.args or []
+    if (
+        not args
+        or len(args) > 2
+        or not (args[0].isascii() and args[0].isdigit())
+        or int(args[0]) not in ALLOWED_COOLDOWNS
+        or (len(args) == 2 and not (args[1].isascii() and args[1].isdigit()))
+    ):
+        await message.reply_text(MSG_SETCOOLDOWN_USAGE)
+        return
+
+    seconds = int(args[0])
+    game_repo = context.bot_data["game_repo"]
+    player_repo = context.bot_data["player_repo"]
+    game = None
+
+    if len(args) == 2:
+        game = await game_repo.get_by_id(int(args[1]))
+        if game is None:
+            await message.reply_text(MSG_GAME_NOT_FOUND)
+            return
+    else:
+        link = None
+        if chat.type in ("group", "supergroup"):
+            link = await player_repo.get_by_chat(chat.id)
+        if link is not None:
+            game = await game_repo.get_by_id(link.game_id)
+        else:
+            games = await game_repo.list_all()
+            if not games:
+                await message.reply_text(MSG_NO_GAMES)
+                return
+            if len(games) == 1:
+                game = games[0]
+            else:
+                lines = [f"[{g.id}] {g.name} ({g.cooldown_seconds}s)" for g in games]
+                await message.reply_text(MSG_SETCOOLDOWN_NEED_GAME.format(games="\n".join(lines)))
+                return
+
+    if game is None:
+        await message.reply_text(MSG_GAME_NOT_FOUND)
+        return
+
+    await game_repo.set_cooldown_seconds(game.id, seconds)
+    logger.info("Admin set cooldown for game_id=%s to %ss", game.id, seconds)
+    await message.reply_text(MSG_SETCOOLDOWN_OK.format(name=game.name, seconds=seconds))
+
+
+async def freeze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+
+    if not _is_admin(context, user.id):
+        await message.reply_text(MSG_NOT_ADMIN)
+        return
+
+    await context.bot_data["game_repo"].set_frozen(True)
+    logger.info("Admin froze the channel.")
+    await message.reply_text(MSG_FREEZE_OK)
+
+
+async def unfreeze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+
+    if not _is_admin(context, user.id):
+        await message.reply_text(MSG_NOT_ADMIN)
+        return
+
+    await context.bot_data["game_repo"].set_frozen(False)
+    logger.info("Admin unfroze the channel.")
+    await message.reply_text(MSG_CHANNEL_UNFROZEN)
 
 
 # ---------------------------------------------------------------------
