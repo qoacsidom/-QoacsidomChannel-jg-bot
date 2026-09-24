@@ -30,8 +30,15 @@ CREATE TABLE IF NOT EXISTS games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 30,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Global key/value settings that must survive restarts (e.g. channel freeze).
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 -- One row = one player's membership in one game. private_chat_id is the
@@ -87,6 +94,17 @@ CREATE INDEX IF NOT EXISTS idx_game_players_chat ON game_players(private_chat_id
 """
 
 
+async def _migrate(connection: aiosqlite.Connection) -> None:
+    """Bring databases created by older versions up to date (idempotent)."""
+    cursor = await connection.execute("PRAGMA table_info(games)")
+    columns = {row["name"] for row in await cursor.fetchall()}
+    if "cooldown_seconds" not in columns:
+        await connection.execute(
+            "ALTER TABLE games ADD COLUMN cooldown_seconds INTEGER NOT NULL DEFAULT 30"
+        )
+        logger.info("Migrated games table: added cooldown_seconds.")
+
+
 async def init_database(database_path: str) -> aiosqlite.Connection:
     """
     Open (creating if necessary) the SQLite database and ensure the schema
@@ -102,6 +120,7 @@ async def init_database(database_path: str) -> aiosqlite.Connection:
     await connection.execute("PRAGMA foreign_keys = ON;")
     await connection.execute("PRAGMA journal_mode = WAL;")
     await connection.executescript(SCHEMA)
+    await _migrate(connection)
     await connection.commit()
 
     logger.info("Database ready at %s", database_path)
