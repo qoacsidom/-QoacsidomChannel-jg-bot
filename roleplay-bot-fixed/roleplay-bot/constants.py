@@ -57,7 +57,21 @@ MSG_PLAYER_INACTIVE = "⚠️ You are currently inactive in this game. Your mess
 
 MSG_GAME_INACTIVE = "⚠️ This game is currently inactive. Your message was not published."
 
-MSG_UNSUPPORTED_MEDIA = "⚠️ Only text messages and photos (with optional captions) are supported."
+MSG_UNSUPPORTED_MEDIA = "⚠️ Only text messages, photos and videos (with optional captions) are supported."
+
+# Persian rejection message actually shown to players for unsupported types.
+MSG_UNSUPPORTED_MEDIA_FA = "فقط عکس، متن یا ویدیو بفرستید"
+
+# --- Anti-spam cooldown --------------------------------------------------
+DEFAULT_COOLDOWN_SECONDS = 30
+ALLOWED_COOLDOWNS = (30, 60, 120)
+
+MSG_COOLDOWN_WAIT = "⏳ Please wait {seconds} seconds."
+
+# --- Freeze / unfreeze -----------------------------------------------------
+MSG_CHANNEL_FROZEN = "🧊 Channel is temporarily frozen by the admin."
+MSG_CHANNEL_UNFROZEN = "🔥 Channel is active again."
+MSG_FREEZE_OK = "🧊 Channel frozen. Nothing will be posted until you send /unfreeze."
 
 MSG_UNKNOWN_SENDER_IN_LINKED_CHAT = (
     "⚠️ This message was not published because it did not come from the registered "
@@ -103,3 +117,31 @@ MSG_LINK_SUCCESS = (
     "Next: reply to the player's message with '{set_name} <value>' or "
     "'{set_country} <value>' to set their identity."
 )
+
+MSG_SETCOOLDOWN_USAGE = (
+    "⚠️ Usage: /setcooldown <30|60|120> [game_id]\n"
+    "Inside a player's linked group the game is detected automatically."
+)
+MSG_SETCOOLDOWN_NEED_GAME = (
+    "⚠️ More than one game exists. Specify which one:\n"
+    "/setcooldown <30|60|120> <game_id>\n\n"
+    "{games}"
+)
+MSG_SETCOOLDOWN_OK = "✅ Cooldown for game '{name}' set to {seconds} seconds."
+MSG_NO_GAMES = "No games yet."
+MSG_GAME_NOT_FOUND = "⚠️ That game no longer exists."
+
+# --- Delete game -------------------------------------------------------------
+MSG_DELETE_PICK_GAME = "🗑️ Select the game to delete:"
+MSG_DELETE_CONFIRM = (
+    "⚠️ Delete game '{name}'?\n"
+    "\n"
+    "What to do with message history?"
+)
+MSG_GAME_DELETED = "🗑️ Game '{name}' deleted. Messages: {messages}."
+MSG_DELETE_MESSAGES_KEPT = "kept"
+MSG_DELETE_MESSAGES_DELETED = "deleted"
+MSG_DELETE_CANCELLED = "Cancelled."
+BTN_DELETE_EVERYTHING = "🗑️ Delete everything"
+BTN_KEEP_MESSAGES = "📚 Keep messages"
+BTN_CANCEL = "❌ Cancel"
